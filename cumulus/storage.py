@@ -107,6 +107,7 @@ class SwiftclientStorage(Auth, Storage):
         headers = get_headers(name, content_type)
 
         if self.use_pyrax:
+            content.seek(0)
             if headers.get("Content-Encoding") == "gzip":
                 content = get_gzipped_contents(content)
             self.connection.store_object(container=self.container_name,
