@@ -2,6 +2,7 @@ import mimetypes
 import pyrax
 import re
 import warnings
+import os
 from gzip import GzipFile
 
 try:
@@ -102,9 +103,10 @@ class CumulusStorage(Auth, Storage):
     Custom storage for Cumulus.
     """
     default_quick_listdir = True
-    container_name = CUMULUS["CONTAINER"]
-    container_uri = CUMULUS["CONTAINER_URI"]
-    container_ssl_uri = CUMULUS["CONTAINER_SSL_URI"]
+    #container_name = CUMULUS["CONTAINER"]
+    container_names = CUMULUS["CONTAINERS"]
+    #container_uri = CUMULUS["CONTAINER_URI"]
+    #container_ssl_uri = CUMULUS["CONTAINER_SSL_URI"]
     ttl = CUMULUS["TTL"]
     file_ttl = CUMULUS["FILE_TTL"]
     use_ssl = CUMULUS["USE_SSL"]
@@ -127,7 +129,7 @@ class CumulusStorage(Auth, Storage):
             content.seek(0)
             if headers.get("Content-Encoding") == "gzip":
                 content = get_gzipped_contents(content)
-            self.connection.store_object(container=self.container_name,
+            self.connection.store_object(container=self.default_container(name),
                                          obj_name=name,
                                          data=content.read(),
                                          content_type=content_type,
@@ -135,14 +137,14 @@ class CumulusStorage(Auth, Storage):
                                          ttl=self.file_ttl,
                                          etag=None)
             # set headers/object metadata
-            self.connection.set_object_metadata(container=self.container_name,
+            self.connection.set_object_metadata(container=self.default_container(name),
                                                 obj=name,
                                                 metadata=headers,
                                                 prefix='',
                                                 clear=True)
         else:
             # TODO gzipped content when using swift client
-            self.connection.put_object(self.container_name, name,
+            self.connection.put_object(self.default_container(name), name,
                                        content, headers=headers)
 
         return name
@@ -154,7 +156,7 @@ class CumulusStorage(Auth, Storage):
         Deleting a model doesn't delete associated files: bit.ly/12s6Oox
         """
         try:
-            self.connection.delete_object(self.container_name, name)
+            self.connection.delete_object(self.default_container(name), name)
         except pyrax.exceptions.ClientException as exc:
             if exc.http_status == 404:
                 pass
@@ -186,7 +188,8 @@ class CumulusStorage(Auth, Storage):
         Returns an absolute URL where the content of each file can be
         accessed directly by a web browser.
         """
-        return u"{0}/{1}".format(self.container_url, name)
+        #return "{0}/{1}".format(self.container_url, name)
+        return "{0}/{1}".format(self.get_container_url(name), name)
 
     def listdir(self, path):
         """
@@ -201,7 +204,7 @@ class CumulusStorage(Auth, Storage):
             path = u"{0}/".format(path)
         path_len = len(path)
         for name in [x["name"] for x in
-                     self.connection.get_container(self.container_name, full_listing=True)[1]]:
+                     self.connection.get_container(self.default_container(self), full_listing=True)[1]]:
             files.append(name[path_len:])
         return ([], files)
 
@@ -217,7 +220,7 @@ class CumulusStorage(Auth, Storage):
             path = u"{0}/".format(path)
         path_len = len(path)
         for name in [x["name"] for x in
-                     self.connection.get_container(self.container_name, full_listing=True)[1]]:
+                     self.connection.get_container(self.default_container(name), full_listing=True)[1]]:
             name = name[path_len:]
             slash = name[1:-1].find("/") + 1
             if slash:
@@ -227,6 +230,18 @@ class CumulusStorage(Auth, Storage):
         dirs = list(dirs)
         dirs.sort()
         return (dirs, files)
+
+    def default_container(self, name):
+        """
+        Selects the appropriate container name from the container names
+        dictionary
+        """
+        PUBLIC_EXTENSIONS = ['jpeg', 'jpg', 'png', 'gif']
+
+        if (os.path.splitext(name)[1]).strip('.') in PUBLIC_EXTENSIONS:
+            return self.container_names['PUBLIC']
+        else:
+            return self.container_names['PRIVATE']
 
 
 class CumulusStaticStorage(CumulusStorage):

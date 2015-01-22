@@ -14,6 +14,8 @@ from cumulus.storage import get_headers, get_content_type, get_gzipped_contents
 
 
 class Command(NoArgsCommand):
+    _containers = {}
+
     help = "Synchronizes project static *or* media files to cloud files."
     option_list = NoArgsCommand.option_list + (
         optparse.make_option("-i", "--include", action="append", default=[],
@@ -101,7 +103,7 @@ class Command(NoArgsCommand):
         # setup
         self.set_options(options)
         self._connection = Auth()._get_connection()
-        self.container = self._connection.get_container(self.container_name)
+        #self.container = self._connection.get_container(self.container_name)
 
         # wipe first
         if self.wipe:
@@ -128,14 +130,14 @@ class Command(NoArgsCommand):
         # match cloud objects
         cloud_objs = self.match_cloud(self.includes, self.excludes)
 
-        remote_objects = {
-            obj.name: datetime.datetime.strptime(
-                obj.last_modified,
-                "%Y-%m-%dT%H:%M:%S.%f") for obj in self.container.get_objects()
-        }
+        # remote_objects = {
+        #     obj.name: datetime.datetime.strptime(
+        #         obj.last_modified,
+        #         "%Y-%m-%dT%H:%M:%S.%f") for obj in self.container.get_objects()
+        # }
 
         # sync
-        self.upload_files(abspaths, relpaths, remote_objects)
+        self.upload_files(abspaths, relpaths, {})
         self.delete_extra_files(relpaths, cloud_objs)
 
         if not self.quiet or self.verbosity > 1:
@@ -145,12 +147,13 @@ class Command(NoArgsCommand):
         """
         Returns the cloud objects that match the include and exclude patterns.
         """
-        cloud_objs = [cloud_obj.name for cloud_obj in self.container.get_objects()]
-        includes_pattern = r"|".join([fnmatch.translate(x) for x in includes])
-        excludes_pattern = r"|".join([fnmatch.translate(x) for x in excludes]) or r"$."
-        excludes = [o for o in cloud_objs if re.match(excludes_pattern, o)]
-        includes = [o for o in cloud_objs if re.match(includes_pattern, o)]
-        return [o for o in includes if o not in excludes]
+        # cloud_objs = [cloud_obj.name for cloud_obj in self.container.get_objects()]
+        # includes_pattern = r"|".join([fnmatch.translate(x) for x in includes])
+        # excludes_pattern = r"|".join([fnmatch.translate(x) for x in excludes]) or r"$."
+        # excludes = [o for o in cloud_objs if re.match(excludes_pattern, o)]
+        # includes = [o for o in cloud_objs if re.match(includes_pattern, o)]
+        # return [o for o in includes if o not in excludes]
+        return []
 
     def match_local(self, prefix, includes, excludes):
         """
@@ -199,6 +202,7 @@ class Command(NoArgsCommand):
         """
         Uploads a file to the container.
         """
+        container = None
         if not self.test_run:
             content = open(abspath, "rb")
             content_type = get_content_type(cloud_filename, content)
@@ -209,7 +213,8 @@ class Command(NoArgsCommand):
                 size = content.size
             else:
                 size = os.stat(abspath).st_size
-            self.container.create(
+            container = self.get_container(abspath)
+            container.create(
                 obj_name=cloud_filename,
                 data=content,
                 content_type=content_type,
@@ -222,7 +227,7 @@ class Command(NoArgsCommand):
 
         self.upload_count += 1
         if not self.quiet or self.verbosity > 1:
-            print("Uploaded: {0}".format(cloud_filename))
+            print("Uploaded: {0} to {1}".format(cloud_filename, container.name))
 
     def delete_extra_files(self, relpaths, cloud_objs):
         """
@@ -265,3 +270,21 @@ class Command(NoArgsCommand):
             print("Test run complete with the following results:")
         print("Skipped {0}. Created {1}. Updated {2}. Deleted {3}.".format(
             self.skip_count, self.create_count, self.update_count, self.delete_count))
+
+    def default_container(self, name):
+        """
+        Selects the appropriate container name from the container names
+        dictionary
+        """
+        PUBLIC_EXTENSIONS = ['jpeg', 'jpg', 'png', 'gif']
+
+        if (os.path.splitext(name)[1]).strip('.') in PUBLIC_EXTENSIONS:
+            return settings.CUMULUS['CONTAINERS']['PUBLIC']
+        else:
+            return settings.CUMULUS['CONTAINERS']['PRIVATE']
+
+    def get_container(self, name):
+        container_name = self.default_container(name)
+        if not container_name in self._containers:
+            self._containers[container_name] = self._connection.get_container(container_name)
+        return self._containers[container_name]
