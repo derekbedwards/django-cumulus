@@ -189,7 +189,12 @@ class CumulusStorage(Auth, Storage):
         accessed directly by a web browser.
         """
         #return "{0}/{1}".format(self.container_url, name)
-        return "{0}/{1}".format(self.get_container_url(name), name)
+        container_url = self.get_container_url(name)
+        if container_url is not None:
+            return "{0}/{1}".format(self.get_container_url(name), name)
+
+        # get a temporary URL if no CDN url available
+        return self._get_object(name).get_temp_url(3600)
 
     def listdir(self, path):
         """
