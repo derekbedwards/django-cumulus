@@ -20,6 +20,9 @@ class Auth(object):
     auth_tenant_name = CUMULUS["AUTH_TENANT_NAME"]
     auth_version = CUMULUS["AUTH_VERSION"]
     pyrax_identity_type = CUMULUS["PYRAX_IDENTITY_TYPE"]
+    containers = {}
+    container_uris = {}
+    container_ssl_uris = {}
 
     def __init__(self, username=None, api_key=None, container=None,
                  connection_kwargs=None, container_uri=None):
@@ -111,7 +114,14 @@ class Auth(object):
                 delattr(self, "_container_public_uri")
         self._container = container
 
-    container = property(_get_container, _set_container)
+    #container = property(_get_container, _set_container)
+
+    def get_container(self, name):
+        default_container_name = self.default_container(name)
+        if not default_container_name in self.containers:
+            self.containers[default_container_name] = self.connection.create_container(default_container_name)
+        
+        return self.containers[default_container_name]
 
     def _get_container_url(self):
         if self.use_ssl and self.container_ssl_uri:
@@ -126,15 +136,25 @@ class Auth(object):
             self._container_public_uri = CUMULUS["CNAMES"][self._container_public_uri]
         return self._container_public_uri
 
-    container_url = property(_get_container_url)
+    #container_url = property(_get_container_url)
+
+    def get_container_url(self, name):
+        default_container_name = self.default_container(name)
+        if self.use_ssl:
+            if not default_container_name in self.container_ssl_uris:
+                self.container_ssl_uris[default_container_name] = self.get_container(name).cdn_ssl_uri
+            return self.container_ssl_uris[default_container_name]
+        else:
+            if not default_container_name in self.container_uris:
+                self.container_uris[default_container_name] = self.get_container(name).cdn_uri
+            return self.container_uris[default_container_name]
 
     def _get_object(self, name):
         """
         Helper function to retrieve the requested Object.
         """
         try:
-            return self.container.get_object(name)
+            #return self.container.get_object(name)
+            return self.get_container(name).get_object(name)
         except pyrax.exceptions.NoSuchObject:
-            return None
-        except swiftclient.exceptions.ClientException:
             return None
