@@ -183,10 +183,14 @@ class CumulusStorage(Auth, Storage):
         else:
             return 0
 
-    def url(self, name):
+    def url(self, name, **kwargs):
         """
         Returns an absolute URL where the content of each file can be
         accessed directly by a web browser.
+
+        Keyword arguments:
+        temp_url_key -- set arbitrary secret shared between Cloud Files and
+        the application. If not populated, pyrax will handle key generation
         """
         #return "{0}/{1}".format(self.container_url, name)
         container_url = self.get_container_url(name)
@@ -194,6 +198,7 @@ class CumulusStorage(Auth, Storage):
             return "{0}/{1}".format(self.get_container_url(name), name)
 
         # get a temporary URL if no CDN url available
+        pyrax.cloudfiles.set_temp_url_key(kwargs.get('temp_url_key'))
         return self._get_object(name).get_temp_url(3600)
 
     def listdir(self, path):
