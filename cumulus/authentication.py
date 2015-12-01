@@ -3,7 +3,9 @@ import pyrax
 try:
     import swiftclient
 except ImportError:
-    pass
+    swiftclient = None
+
+from django.utils.functional import cached_property
 
 from cumulus.settings import CUMULUS
 
@@ -62,16 +64,19 @@ class Auth(object):
     def _get_connection(self):
         if not hasattr(self, "_connection"):
             if self.use_pyrax:
-                self._connection = pyrax.connect_to_cloudfiles(public=True)
-            else:
+                public = not self.use_snet  # invert
+                self._connection = pyrax.connect_to_cloudfiles(public=public)
+            elif swiftclient:
                 self._connection = swiftclient.Connection(
                     authurl=self.auth_url,
                     user=self.username,
                     key=self.api_key,
-                    snet=self.servicenet,
+                    snet=self.use_snet,
                     auth_version=self.auth_version,
                     tenant_name=self.auth_tenant_name,
                 )
+            else:
+                raise NotImplementedError("Cloud connection is not correctly configured.")
         return self._connection
 
     def _set_connection(self, value):
@@ -123,20 +128,37 @@ class Auth(object):
         
         return self.containers[default_container_name]
 
-    def _get_container_url(self):
-        if self.use_ssl and self.container_ssl_uri:
-            self._container_public_uri = self.container_ssl_uri
-        elif self.use_ssl:
-            self._container_public_uri = self.container.cdn_ssl_uri
-        elif self.container_uri:
-            self._container_public_uri = self.container_uri
+    def get_cname(self, uri):
+        if not CUMULUS['CNAMES'] or uri not in CUMULUS['CNAMES']:
+            return uri
+
+        return CUMULUS['CNAMES'][uri]
+
+    @cached_property
+    def container_cdn_ssl_uri(self):
+        if self.container_ssl_uri:
+            uri = self.container_ssl_uri
         else:
-            self._container_public_uri = self.container.cdn_uri
-        if CUMULUS["CNAMES"] and self._container_public_uri in CUMULUS["CNAMES"]:
-            self._container_public_uri = CUMULUS["CNAMES"][self._container_public_uri]
-        return self._container_public_uri
+            uri = self.container.cdn_ssl_uri
+
+        return self.get_cname(uri)
+
+    @cached_property
+    def container_cdn_uri(self):
+        if self.container_uri:
+            uri = self.container_uri
+        else:
+            uri = self.container.cdn_uri
+
+        return self.get_cname(uri)
 
     #container_url = property(_get_container_url)
+    @property
+    def container_url(self):
+        if self.use_ssl:
+            return self.container_cdn_ssl_uri
+        else:
+            return self.container_cdn_uri
 
     def get_container_url(self, name):
         default_container_name = self.default_container(name)
@@ -153,8 +175,16 @@ class Auth(object):
         """
         Helper function to retrieve the requested Object.
         """
-        try:
-            #return self.container.get_object(name)
-            return self.get_container(name).get_object(name)
-        except pyrax.exceptions.NoSuchObject:
-            return None
+        if self.use_pyrax:
+            try:
+                #return self.container.get_object(name)
+                return self.get_container(name).get_object(name)
+            except pyrax.exceptions.NoSuchObject:
+                return None
+        elif swiftclient:
+            try:
+                return self.container.get_object(name)
+            except swiftclient.exceptions.ClientException:
+                return None
+        else:
+            return self.container.get_object(name)

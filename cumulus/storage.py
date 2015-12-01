@@ -1,16 +1,32 @@
 import mimetypes
 import pyrax
 import re
+import warnings
 import os
 from gzip import GzipFile
 
 try:
     from cStringIO import StringIO
 except ImportError:
-    from StringIO import StringIO
+    try:
+        from StringIO import StringIO
+    except ImportError:
+        from io import StringIO
 
-from django.core.files.base import File, ContentFile
 from django.core.files.storage import Storage
+from django.core.files.base import File, ContentFile
+
+try:
+    from django.utils.deconstruct import deconstructible
+except ImportError:
+    # Make a no-op decorator to avoid errors
+    def deconstructible(*args, **kwargs):
+        def decorator(klass):
+            return klass
+
+        if not args:
+            return decorator
+        return decorator(*args, **kwargs)
 
 from cumulus.authentication import Auth
 from cumulus.settings import CUMULUS
@@ -81,9 +97,10 @@ def get_gzipped_contents(input_file):
     return ContentFile(zbuf.getvalue())
 
 
-class SwiftclientStorage(Auth, Storage):
+@deconstructible
+class CumulusStorage(Auth, Storage):
     """
-    Custom storage for Swiftclient.
+    Custom storage for Cumulus.
     """
     default_quick_listdir = True
     #container_name = CUMULUS["CONTAINER"]
@@ -96,13 +113,13 @@ class SwiftclientStorage(Auth, Storage):
 
     def _open(self, name, mode="rb"):
         """
-        Returns the SwiftclientStorageFile.
+        Returns the CumulusStorageFile.
         """
         return ContentFile(self._get_object(name).get())
 
     def _save(self, name, content):
         """
-        Uses the Swiftclient service to write ``content`` to a remote
+        Uses the Cumulus service to write ``content`` to a remote
         file (called ``name``).
         """
         content_type = get_content_type(name, content.file)
@@ -177,6 +194,7 @@ class SwiftclientStorage(Auth, Storage):
             return "{0}/{1}".format(self.get_container_url(name), name)
 
         # get a temporary URL if no CDN url available
+        pyrax.cloudfiles.set_temp_url_key(CUMULUS.get('TEMP_URL_KEY'))
         return self._get_object(name).get_temp_url(3600)
 
     def listdir(self, path):
@@ -189,7 +207,7 @@ class SwiftclientStorage(Auth, Storage):
         """
         files = []
         if path and not path.endswith("/"):
-            path = "{0}/".format(path)
+            path = u"{0}/".format(path)
         path_len = len(path)
         for name in [x["name"] for x in
                      self.connection.get_container(self.default_container(self), full_listing=True)[1]]:
@@ -205,7 +223,7 @@ class SwiftclientStorage(Auth, Storage):
         dirs = set()
         files = []
         if path and not path.endswith("/"):
-            path = "{0}/".format(path)
+            path = u"{0}/".format(path)
         path_len = len(path)
         for name in [x["name"] for x in
                      self.connection.get_container(self.default_container(name), full_listing=True)[1]]:
@@ -232,25 +250,25 @@ class SwiftclientStorage(Auth, Storage):
             return self.container_names['PRIVATE']
 
 
-class SwiftclientStaticStorage(SwiftclientStorage):
+class CumulusStaticStorage(CumulusStorage):
     """
-    Subclasses SwiftclientStorage to automatically set the container
+    Subclasses CumulusStorage to automatically set the container
     to the one specified in CUMULUS["STATIC_CONTAINER"]. This provides
     the ability to specify a separate storage backend for Django's
     collectstatic command.
 
     To use, make sure CUMULUS["STATIC_CONTAINER"] is set to something other
     than CUMULUS["CONTAINER"]. Then, tell Django's staticfiles app by setting
-    STATICFILES_STORAGE = "cumulus.storage.SwiftclientStaticStorage".
+    STATICFILES_STORAGE = "cumulus.storage.CumulusStaticStorage".
     """
     container_name = CUMULUS["STATIC_CONTAINER"]
     container_uri = CUMULUS["STATIC_CONTAINER_URI"]
     container_ssl_uri = CUMULUS["STATIC_CONTAINER_SSL_URI"]
 
 
-class ThreadSafeSwiftclientStorage(SwiftclientStorage):
+class ThreadSafeCumulusStorage(CumulusStorage):
     """
-    Extends SwiftclientStorage to make it mostly thread safe.
+    Extends CumulusStorage to make it mostly thread safe.
 
     As long as you do not pass container or cloud objects between
     threads, you will be thread safe.
@@ -258,19 +276,19 @@ class ThreadSafeSwiftclientStorage(SwiftclientStorage):
     Uses one connection/container per thread.
     """
     def __init__(self, *args, **kwargs):
-        super(ThreadSafeSwiftclientStorage, self).__init__(*args, **kwargs)
+        super(ThreadSafeCumulusStorage, self).__init__(*args, **kwargs)
 
         import threading
         self.local_cache = threading.local()
 
     def _get_connection(self):
         if not hasattr(self.local_cache, "connection"):
-            connection = self._get_connection()
+            super(ThreadSafeSwiftclientStorage, self)._get_connection()
             self.local_cache.connection = connection
 
         return self.local_cache.connection
 
-    connection = property(_get_connection, SwiftclientStorage._set_connection)
+    connection = property(_get_connection, CumulusStorage._set_connection)
 
     def _get_container(self):
         if not hasattr(self.local_cache, "container"):
@@ -279,4 +297,25 @@ class ThreadSafeSwiftclientStorage(SwiftclientStorage):
 
         return self.local_cache.container
 
-    container = property(_get_container, SwiftclientStorage._set_container)
+    container = property(_get_container, CumulusStorage._set_container)
+
+
+class SwiftclientStorage(CumulusStorage):
+    def __init__(self, *args, **kwargs):
+        warnings.warn("SwiftclientStorage is deprecated and will be removed in django-cumulus==1.3: \
+                       Use CumulusStorage instead.", DeprecationWarning)
+        super(SwiftclientStorage, self).__init__()
+
+
+class SwiftclientStaticStorage(CumulusStaticStorage):
+    def __init__(self, *args, **kwargs):
+        warnings.warn("SwiftclientStaticStorage is deprecated and will be removed in django-cumulus==1.3: \
+                       Use CumulusStaticStorage instead.", DeprecationWarning)
+        super(SwiftclientStaticStorage, self).__init__()
+
+
+class ThreadSafeSwiftclientStorage(ThreadSafeCumulusStorage):
+    def __init__(self, *args, **kwargs):
+        warnings.warn("ThreadSafeSwiftclientStorage is deprecated and will be removed in django-cumulus==1.3: \
+                       Use ThreadSafeCumulusStorage instead.", DeprecationWarning)
+        super(ThreadSafeSwiftclientStorage, self).__init__()
